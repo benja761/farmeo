@@ -1,0 +1,330 @@
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UIS = game:GetService("UserInputService")
+
+local LocalPlayer = Players.LocalPlayer
+local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
+
+local DEPTO_POS = Vector3.new(1180.30, 3.54, -189.98)
+local MASHMALLOW_POS = Vector3.new(510.23, 3.41, 598.50)
+
+local gui = Instance.new("ScreenGui")
+gui.Name = "MiniCoordenadasUI"
+gui.ResetOnSpawn = false
+gui.Parent = PlayerGui
+
+local main = Instance.new("Frame")
+main.Parent = gui
+main.Size = UDim2.new(0, 230, 0, 115)
+main.Position = UDim2.new(0, 15, 0, 15)
+main.BackgroundColor3 = Color3.fromRGB(12, 12, 18)
+main.BorderSizePixel = 0
+Instance.new("UICorner", main).CornerRadius = UDim.new(0, 10)
+
+local stroke = Instance.new("UIStroke")
+stroke.Parent = main
+stroke.Color = Color3.fromRGB(90, 80, 255)
+stroke.Thickness = 1.5
+
+local title = Instance.new("TextLabel")
+title.Parent = main
+title.BackgroundTransparency = 1
+title.Position = UDim2.new(0, 10, 0, 6)
+title.Size = UDim2.new(1, -20, 0, 22)
+title.Font = Enum.Font.GothamBold
+title.Text = "Mini Coordenadas"
+title.TextColor3 = Color3.fromRGB(255,255,255)
+title.TextSize = 14
+title.TextXAlignment = Enum.TextXAlignment.Left
+
+local subtitle = Instance.new("TextLabel")
+subtitle.Parent = main
+subtitle.BackgroundTransparency = 1
+subtitle.Position = UDim2.new(0, 10, 0, 26)
+subtitle.Size = UDim2.new(1, -20, 0, 16)
+subtitle.Font = Enum.Font.Gotham
+subtitle.Text = "Z = ocultar / mostrar"
+subtitle.TextColor3 = Color3.fromRGB(140,140,160)
+subtitle.TextSize = 11
+subtitle.TextXAlignment = Enum.TextXAlignment.Left
+
+local coordBox = Instance.new("TextLabel")
+coordBox.Parent = main
+coordBox.Size = UDim2.new(1, -20, 0, 26)
+coordBox.Position = UDim2.new(0, 10, 0, 48)
+coordBox.BackgroundColor3 = Color3.fromRGB(24, 24, 32)
+coordBox.TextColor3 = Color3.fromRGB(230,230,235)
+coordBox.Font = Enum.Font.Gotham
+coordBox.TextSize = 13
+coordBox.Text = "Esperando selección..."
+coordBox.BorderSizePixel = 0
+Instance.new("UICorner", coordBox).CornerRadius = UDim.new(0, 8)
+
+local leftBtn = Instance.new("TextButton")
+leftBtn.Parent = main
+leftBtn.Size = UDim2.new(0.48, -5, 0, 30)
+leftBtn.Position = UDim2.new(0, 10, 1, -40)
+leftBtn.BackgroundColor3 = Color3.fromRGB(95, 85, 255)
+leftBtn.TextColor3 = Color3.fromRGB(255,255,255)
+leftBtn.Font = Enum.Font.GothamBold
+leftBtn.TextSize = 14
+leftBtn.Text = "Actualizar"
+leftBtn.BorderSizePixel = 0
+Instance.new("UICorner", leftBtn).CornerRadius = UDim.new(0, 8)
+
+local rightBtn = Instance.new("TextButton")
+rightBtn.Parent = main
+rightBtn.Size = UDim2.new(0.48, -5, 0, 30)
+rightBtn.Position = UDim2.new(0.52, 0, 1, -40)
+rightBtn.BackgroundColor3 = Color3.fromRGB(32, 32, 40)
+rightBtn.TextColor3 = Color3.fromRGB(255,255,255)
+rightBtn.Font = Enum.Font.GothamBold
+rightBtn.TextSize = 14
+rightBtn.Text = "Redondear"
+rightBtn.BorderSizePixel = 0
+Instance.new("UICorner", rightBtn).CornerRadius = UDim.new(0, 8)
+
+local checksHolder = Instance.new("Frame")
+checksHolder.Parent = main
+checksHolder.BackgroundTransparency = 1
+checksHolder.Position = UDim2.new(0, 10, 0, 80)
+checksHolder.Size = UDim2.new(1, -20, 0, 0)
+
+local hidden = false
+UIS.InputBegan:Connect(function(input, gp)
+	if gp then return end
+	if input.KeyCode == Enum.KeyCode.Z then
+		hidden = not hidden
+		for _,v in ipairs(main:GetChildren()) do
+			if v ~= title and v ~= subtitle then
+				v.Visible = not hidden
+			end
+		end
+		main.Size = hidden and UDim2.new(0, 230, 0, 40) or UDim2.new(0, 230, 0, 115)
+	end
+end)
+
+local dragging = false
+local dragStart
+local startPos
+
+title.InputBegan:Connect(function(input)
+	if input.UserInputType == Enum.UserInputType.MouseButton1 then
+		dragging = true
+		dragStart = input.Position
+		startPos = main.Position
+	end
+end)
+
+UIS.InputEnded:Connect(function(input)
+	if input.UserInputType == Enum.UserInputType.MouseButton1 then
+		dragging = false
+	end
+end)
+
+UIS.InputChanged:Connect(function(input)
+	if dragging and input.UserInputType == Enum.UserInputType.MouseMovement then
+		local delta = input.Position - dragStart
+		main.Position = UDim2.new(
+			startPos.X.Scale, startPos.X.Offset + delta.X,
+			startPos.Y.Scale, startPos.Y.Offset + delta.Y
+		)
+	end
+end)
+
+local selectedTarget = nil
+local selectedName = nil
+local roundCoords = false
+
+local function setCoordText(pos)
+	if not pos then
+		coordBox.Text = "Esperando selección..."
+		return
+	end
+
+	if roundCoords then
+		coordBox.Text = ("X: %d | Y: %d | Z: %d"):format(
+			math.round(pos.X), math.round(pos.Y), math.round(pos.Z)
+		)
+	else
+		coordBox.Text = ("X: %.2f | Y: %.2f | Z: %.2f"):format(pos.X, pos.Y, pos.Z)
+	end
+end
+
+local function createCheckbox(text, order, callback)
+	local holder = Instance.new("Frame")
+	holder.Parent = checksHolder
+	holder.BackgroundTransparency = 1
+	holder.Size = UDim2.new(1, 0, 0, 24)
+	holder.Position = UDim2.new(0, 0, 0, (order - 1) * 24)
+
+	local box = Instance.new("TextButton")
+	box.Parent = holder
+	box.Size = UDim2.new(0, 18, 0, 18)
+	box.Position = UDim2.new(0, 0, 0, 3)
+	box.BackgroundColor3 = Color3.fromRGB(30, 30, 38)
+	box.Text = ""
+	box.BorderSizePixel = 0
+	Instance.new("UICorner", box).CornerRadius = UDim.new(0, 5)
+
+	local fill = Instance.new("Frame")
+	fill.Parent = box
+	fill.Size = UDim2.new(1, -6, 1, -6)
+	fill.Position = UDim2.new(0, 3, 0, 3)
+	fill.BackgroundColor3 = Color3.fromRGB(95, 85, 255)
+	fill.Visible = false
+	fill.BorderSizePixel = 0
+	Instance.new("UICorner", fill).CornerRadius = UDim.new(0, 4)
+
+	local label = Instance.new("TextLabel")
+	label.Parent = holder
+	label.BackgroundTransparency = 1
+	label.Position = UDim2.new(0, 26, 0, 0)
+	label.Size = UDim2.new(1, -26, 1, 0)
+	label.Font = Enum.Font.Gotham
+	label.TextColor3 = Color3.fromRGB(230,230,235)
+	label.TextSize = 12
+	label.TextXAlignment = Enum.TextXAlignment.Left
+	label.Text = text
+
+	local state = false
+
+	local function setState(v)
+		state = v
+		fill.Visible = v
+		callback(v)
+	end
+
+	box.MouseButton1Click:Connect(function()
+		setState(not state)
+	end)
+
+	return {
+		Set = setState,
+		Get = function() return state end
+	}
+end
+
+local depaCheck, mashCheck
+
+depaCheck = createCheckbox("Ir a depa", 1, function(v)
+	if v then
+		if mashCheck then mashCheck.Set(false) end
+		selectedTarget = DEPTO_POS
+		selectedName = "Depa"
+		setCoordText(selectedTarget)
+	else
+		if selectedName == "Depa" then
+			selectedTarget = nil
+			selectedName = nil
+			setCoordText(nil)
+		end
+	end
+end)
+
+mashCheck = createCheckbox("Comprar mashmallow", 2, function(v)
+	if v then
+		if depaCheck then depaCheck.Set(false) end
+		selectedTarget = MASHMALLOW_POS
+		selectedName = "Mashmallow"
+		setCoordText(selectedTarget)
+	else
+		if selectedName == "Mashmallow" then
+			selectedTarget = nil
+			selectedName = nil
+			setCoordText(nil)
+		end
+	end
+end)
+
+local moving = false
+local moveThread = 0
+
+local function getCharacterParts()
+	local character = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
+	local humanoid = character:FindFirstChildOfClass("Humanoid")
+	local root = character:FindFirstChild("HumanoidRootPart")
+	if not humanoid or not root then
+		return nil, nil, nil
+	end
+	return character, humanoid, root
+end
+
+local function raycastToGround(targetPos)
+	local params = RaycastParams.new()
+	params.FilterType = Enum.RaycastFilterType.Blacklist
+
+	local character = LocalPlayer.Character
+	if character then
+		params.FilterDescendantsInstances = {character}
+	end
+
+	local origin = targetPos + Vector3.new(0, 50, 0)
+	local direction = Vector3.new(0, -200, 0)
+	local result = workspace:Raycast(origin, direction, params)
+
+	if result then
+		return Vector3.new(targetPos.X, result.Position.Y + 2.5, targetPos.Z)
+	end
+
+	return targetPos
+end
+
+local function moveSlowlyTo(targetPos)
+	local _, humanoid, root = getCharacterParts()
+	if not humanoid or not root then return end
+
+	moveThread += 1
+	local myThread = moveThread
+	moving = true
+
+	humanoid.WalkSpeed = 10
+
+	while myThread == moveThread do
+		if not root.Parent or humanoid.Health <= 0 then
+			break
+		end
+
+		local flatCurrent = Vector3.new(root.Position.X, 0, root.Position.Z)
+		local flatTarget = Vector3.new(targetPos.X, 0, targetPos.Z)
+		local distance = (flatTarget - flatCurrent).Magnitude
+
+		if distance <= 4 then
+			break
+		end
+
+		local dir = (flatTarget - flatCurrent).Unit
+		local step = math.clamp(distance, 0, 10)
+		local nextFlat = flatCurrent + dir * step
+
+		local nextPos = raycastToGround(Vector3.new(nextFlat.X, targetPos.Y, nextFlat.Z))
+		humanoid:MoveTo(nextPos)
+
+		local reached = humanoid.MoveToFinished:Wait()
+		if not reached then
+			task.wait(0.2)
+		else
+			task.wait(0.05)
+		end
+	end
+
+	moving = false
+end
+
+leftBtn.MouseButton1Click:Connect(function()
+	if selectedTarget and not moving then
+		task.spawn(function()
+			moveSlowlyTo(selectedTarget)
+		end)
+	end
+end)
+
+rightBtn.MouseButton1Click:Connect(function()
+	roundCoords = not roundCoords
+	rightBtn.Text = roundCoords and "Decimal" or "Redondear"
+	if selectedTarget then
+		setCoordText(selectedTarget)
+	end
+end)
+
+setCoordText(nil)
