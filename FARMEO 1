@@ -1,330 +1,1366 @@
+-- MONITO PISTOLA - EXECUTOR MINI LOOP V6
+-- EXECUTE / STOP EXEC
+-- Verifica Patata y Harina por inventario
+-- Alinea antes de interactuar
+-- ESP de ollas FREE / USED
+-- Usa olla libre y espera 60s
+-- Loop infinito hasta STOP EXEC
+
 local Players = game:GetService("Players")
+local UserInputService = game:GetService("UserInputService")
 local RunService = game:GetService("RunService")
-local UIS = game:GetService("UserInputService")
+local Workspace = game:GetService("Workspace")
+
+local HAS_VIM, VirtualInputManager = pcall(function()
+	return game:GetService("VirtualInputManager")
+end)
 
 local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
+local Camera = Workspace.CurrentCamera
 
-local DEPTO_POS = Vector3.new(1180.30, 3.54, -189.98)
-local MASHMALLOW_POS = Vector3.new(510.23, 3.41, 598.50)
+local old = PlayerGui:FindFirstChild("MonitoRouteExecutorMiniV6")
+if old then
+	old:Destroy()
+end
 
+local ROUTE = {
+	{
+		label = "Registro",
+		promptPathHint = "clipboard",
+		approach = {
+			Vector3.new(-479.53, 3.86, -444.56),
+			Vector3.new(-479.56, 3.86, -440.81),
+			Vector3.new(-479.57, 3.86, -436.25),
+		},
+		stand = Vector3.new(-479.57, 3.86, -436.25),
+		promptPos = Vector3.new(-479.22, 5.34, -433.09),
+		holdSeconds = 0.30,
+		afterInteractWait = 0.55,
+		maxRetries = 2,
+	},
+	{
+		label = "Patata",
+		equipKeywords = {"potato", "patata"},
+		excludeKeywords = {"potato chips", "chips", "fried", "frita"},
+		promptPathHint = "potato cutter",
+		approach = {
+			Vector3.new(-477.38, 3.86, -443.62),
+			Vector3.new(-471.11, 3.86, -449.76),
+			Vector3.new(-466.82, 3.86, -453.27),
+			Vector3.new(-462.35, 3.86, -458.13),
+		},
+		stand = Vector3.new(-462.35, 3.86, -458.13),
+		promptPos = Vector3.new(-460.28, 4.33, -457.60),
+		holdSeconds = 1.10,
+		afterInteractWait = 1.00,
+		doneTimeout = 2.80,
+		maxRetries = 4,
+		alignRadius = 1.25,
+	},
+	{
+		label = "Bolsa",
+		promptPathHint = "plastic bag",
+		approach = {
+			Vector3.new(-463.57, 3.86, -460.66),
+			Vector3.new(-464.76, 3.86, -464.04),
+			Vector3.new(-465.82, 3.86, -467.60),
+			Vector3.new(-464.18, 3.86, -472.53),
+			Vector3.new(-463.95, 3.86, -472.91),
+		},
+		stand = Vector3.new(-463.95, 3.86, -472.91),
+		promptPos = Vector3.new(-459.72, 4.00, -473.52),
+		holdSeconds = 1.00,
+		afterInteractWait = 0.85,
+		maxRetries = 3,
+		alignRadius = 1.20,
+	},
+	{
+		label = "Harina",
+		equipKeywords = {"flour", "harina"},
+		excludeKeywords = {"potato chips", "chips", "fried", "frita"},
+		promptPathHint = "bowls",
+		approach = {
+			Vector3.new(-465.99, 3.86, -481.45),
+			Vector3.new(-466.53, 3.86, -494.67),
+			Vector3.new(-466.20, 3.86, -517.99),
+			Vector3.new(-464.29, 3.86, -520.69),
+		},
+		stand = Vector3.new(-464.28, 3.86, -520.69),
+		promptPos = Vector3.new(-460.77, 4.01, -522.24),
+		holdSeconds = 0.35,
+		afterInteractWait = 1.00,
+		doneTimeout = 3.00,
+		maxRetries = 5,
+		alignRadius = 1.55,
+	},
+	{
+		label = "Coccion",
+		promptPathHint = "pots/pot",
+		approach = {
+			Vector3.new(-464.25, 3.86, -518.20),
+			Vector3.new(-467.89, 3.86, -493.38),
+			Vector3.new(-479.57, 3.86, -481.52),
+			Vector3.new(-490.26, 3.86, -469.05),
+			Vector3.new(-505.76, 3.86, -465.60),
+			Vector3.new(-515.15, 4.22, -460.14),
+		},
+		stand = Vector3.new(-515.15, 4.22, -460.14),
+		promptPos = Vector3.new(-520.36, 4.67, -461.58),
+		holdSeconds = 0.45,
+		finalInteractHold = 0.45,
+		afterInteractWait = 1.00,
+		cookWaitSeconds = 60,
+		forceArrival = true,
+	},
+}
+
+local MOVE_TIMEOUT = 8.0
+local REPATH_INTERVAL = 0.18
+local REACH_DISTANCE = 3.0
+local PROMPT_RADIUS = 10
+
+local POT_CONFIG = {
+	Keywords = {"pot", "olla", "caldero"},
+	BusyHints = {"busy", "occupied", "cooking", "inuse", "in_use", "owner", "timer", "timeleft", "state", "used"},
+	RefreshInterval = 0.25,
+	StandDistance = 4.4,
+	LocalLockSeconds = 60,
+}
+
+local executing = false
+local stopFlag = false
+
+local PotSystem = {
+	cache = {},
+	esp = {},
+	localLocks = {},
+}
+
+local function lowerText(v)
+	return string.lower(tostring(v or ""))
+end
+
+local function hasAny(text, list)
+	text = lowerText(text)
+	for _, word in ipairs(list or {}) do
+		if string.find(text, lowerText(word), 1, true) then
+			return true
+		end
+	end
+	return false
+end
+
+local function hasNone(text, list)
+	text = lowerText(text)
+	for _, word in ipairs(list or {}) do
+		if string.find(text, lowerText(word), 1, true) then
+			return false
+		end
+	end
+	return true
+end
+
+local function getCharacter()
+	return LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
+end
+
+local function getHumanoid()
+	local char = getCharacter()
+	return char:FindFirstChildOfClass("Humanoid")
+end
+
+local function getRoot()
+	local char = getCharacter()
+	return char:FindFirstChild("HumanoidRootPart")
+end
+
+local function hardStop()
+	local hum = getHumanoid()
+	local root = getRoot()
+	if hum and root then
+		pcall(function()
+			hum:MoveTo(root.Position)
+		end)
+	end
+end
+
+local function waitWithStop(seconds)
+	local t0 = tick()
+	while tick() - t0 < seconds do
+		if stopFlag then
+			return false
+		end
+		task.wait(0.05)
+	end
+	return true
+end
+
+local function lookCharacterAt(targetPos)
+	local root = getRoot()
+	if not root then
+		return
+	end
+
+	local current = root.Position
+	local lookAt = Vector3.new(targetPos.X, current.Y, targetPos.Z)
+	if (lookAt - current).Magnitude > 0.1 then
+		root.CFrame = CFrame.new(current, lookAt)
+	end
+end
+
+local function lookCameraAt(targetPos)
+	if not Camera then
+		return
+	end
+
+	local root = getRoot()
+	if not root then
+		return
+	end
+
+	local eye = root.Position + Vector3.new(0, 2.2, 0)
+	Camera.CFrame = CFrame.new(eye, targetPos)
+end
+
+local function aimAtPrompt(promptPos)
+	lookCharacterAt(promptPos)
+	task.wait(0.03)
+	lookCameraAt(promptPos)
+	task.wait(0.03)
+	lookCharacterAt(promptPos)
+end
+
+local function slowTpTo(targetPos, steps, delayTime)
+	local root = getRoot()
+	if not root then
+		return false
+	end
+
+	steps = steps or 10
+	delayTime = delayTime or 0.03
+
+	for i = 1, steps do
+		if stopFlag then
+			return false
+		end
+
+		root = getRoot()
+		if not root then
+			return false
+		end
+
+		local current = root.Position
+		local nextPos = current:Lerp(targetPos, 0.28)
+
+		local _, y, _ = root.CFrame:ToOrientation()
+		root.CFrame = CFrame.new(nextPos) * CFrame.Angles(0, y, 0)
+
+		task.wait(delayTime)
+	end
+
+	return true
+end
+
+local function moveToPoint(targetPos, timeout, forceArrival)
+	local hum = getHumanoid()
+	local root = getRoot()
+	if not hum or not root then
+		return false
+	end
+
+	local started = tick()
+	local reached = false
+	local repathAt = 0
+	local lastDist = math.huge
+	local stuckSince = nil
+	local conn
+
+	conn = hum.MoveToFinished:Connect(function(ok)
+		if ok then
+			reached = true
+		end
+	end)
+
+	while tick() - started < timeout do
+		if stopFlag then
+			if conn then conn:Disconnect() end
+			hardStop()
+			return false
+		end
+
+		hum = getHumanoid()
+		root = getRoot()
+		if not hum or not root then
+			if conn then conn:Disconnect() end
+			return false
+		end
+
+		local dist = (root.Position - targetPos).Magnitude
+		if dist <= REACH_DISTANCE or reached then
+			if conn then conn:Disconnect() end
+			return true
+		end
+
+		if dist >= lastDist - 0.15 then
+			if not stuckSince then
+				stuckSince = tick()
+			end
+		else
+			stuckSince = nil
+		end
+		lastDist = dist
+
+		if stuckSince and tick() - stuckSince >= 1.0 and forceArrival then
+			if conn then conn:Disconnect() end
+			slowTpTo(targetPos, 10, 0.03)
+			root = getRoot()
+			return root and ((root.Position - targetPos).Magnitude <= REACH_DISTANCE + 1.5) or false
+		end
+
+		if tick() >= repathAt then
+			repathAt = tick() + REPATH_INTERVAL
+			pcall(function()
+				hum:MoveTo(targetPos)
+			end)
+		end
+
+		task.wait(0.05)
+	end
+
+	if conn then conn:Disconnect() end
+
+	if forceArrival then
+		slowTpTo(targetPos, 12, 0.03)
+		root = getRoot()
+		return root and ((root.Position - targetPos).Magnitude <= REACH_DISTANCE + 1.5) or false
+	end
+
+	return false
+end
+
+local function collectTools()
+	local tools = {}
+	local backpack = LocalPlayer:FindFirstChildOfClass("Backpack")
+	local character = LocalPlayer.Character
+
+	local function collect(container)
+		if not container then
+			return
+		end
+		for _, obj in ipairs(container:GetChildren()) do
+			if obj:IsA("Tool") then
+				table.insert(tools, obj)
+			end
+		end
+	end
+
+	collect(backpack)
+	collect(character)
+	return tools
+end
+
+local function getInventoryCounts()
+	local counts = {
+		potato = 0,
+		flour = 0,
+		chips = 0,
+	}
+
+	for _, tool in ipairs(collectTools()) do
+		local name = lowerText(tool.Name)
+
+		if (name == "potato" or name == "patata") and hasNone(name, {"chips", "fried", "frita"}) then
+			counts.potato = counts.potato + 1
+		elseif name == "flour" or name == "harina" then
+			counts.flour = counts.flour + 1
+		elseif string.find(name, "potato chips", 1, true) or string.find(name, "chips", 1, true) then
+			counts.chips = counts.chips + 1
+		end
+	end
+
+	return counts
+end
+
+local function findToolForStage(stage)
+	local tools = collectTools()
+
+	for _, tool in ipairs(tools) do
+		local name = lowerText(tool.Name)
+
+		if stage.excludeKeywords and hasAny(name, stage.excludeKeywords) then
+			-- ignore
+		else
+			if hasAny(name, stage.equipKeywords or {}) then
+				return tool
+			end
+		end
+	end
+
+	return nil
+end
+
+local function equipForStage(stage)
+	local hum = getHumanoid()
+	if not hum or not stage.equipKeywords then
+		return false
+	end
+
+	local tool = findToolForStage(stage)
+	if not tool then
+		return false
+	end
+
+	local ok = pcall(function()
+		hum:EquipTool(tool)
+	end)
+
+	if ok then
+		task.wait(0.15)
+	end
+
+	return ok
+end
+
+local function buildPath(instance)
+	local parts = {}
+	local current = instance
+	local count = 0
+
+	while current and current ~= game and count < 12 do
+		table.insert(parts, 1, current.Name)
+		current = current.Parent
+		count = count + 1
+	end
+
+	return table.concat(parts, "/")
+end
+
+local function getPromptWorldPosition(prompt)
+	if not prompt or not prompt.Parent then
+		return nil
+	end
+
+	local parent = prompt.Parent
+
+	if parent:IsA("BasePart") then
+		return parent.Position
+	end
+
+	if parent:IsA("Attachment") then
+		return parent.WorldPosition
+	end
+
+	local model = parent:FindFirstAncestorOfClass("Model")
+	if model then
+		if model.PrimaryPart then
+			return model.PrimaryPart.Position
+		end
+
+		local ok, cf = pcall(function()
+			return model:GetPivot()
+		end)
+		if ok and cf then
+			return cf.Position
+		end
+	end
+
+	local part = parent:FindFirstAncestorWhichIsA("BasePart")
+	if part then
+		return part.Position
+	end
+
+	return nil
+end
+
+local function findPromptForStage(stage)
+	local bestPrompt = nil
+	local bestScore = math.huge
+
+	for _, obj in ipairs(workspace:GetDescendants()) do
+		if obj:IsA("ProximityPrompt") and obj.Enabled and obj.Parent then
+			local pos = getPromptWorldPosition(obj)
+			if pos then
+				local dist = (pos - stage.promptPos).Magnitude
+				if dist <= PROMPT_RADIUS then
+					local score = dist
+					if stage.promptPathHint then
+						local path = lowerText(buildPath(obj.Parent))
+						local hint = lowerText(stage.promptPathHint)
+						if not string.find(path, hint, 1, true) then
+							score = score + 100
+						end
+					end
+
+					if score < bestScore then
+						bestScore = score
+						bestPrompt = obj
+					end
+				end
+			end
+		end
+	end
+
+	return bestPrompt
+end
+
+local function tapE()
+	if typeof(keypress) == "function" and typeof(keyrelease) == "function" then
+		local ok = pcall(function()
+			keypress(0x45)
+			task.wait(0.03)
+			keyrelease(0x45)
+		end)
+		if ok then
+			return true
+		end
+	end
+
+	if HAS_VIM and VirtualInputManager then
+		return pcall(function()
+			VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.E, false, game)
+			task.wait(0.03)
+			VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.E, false, game)
+		end)
+	end
+
+	return false
+end
+
+local function holdE(seconds)
+	if typeof(keypress) == "function" and typeof(keyrelease) == "function" then
+		local ok = pcall(function()
+			keypress(0x45)
+			task.wait(seconds)
+			keyrelease(0x45)
+		end)
+		if ok then
+			return true
+		end
+	end
+
+	if HAS_VIM and VirtualInputManager then
+		return pcall(function()
+			VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.E, false, game)
+			task.wait(seconds)
+			VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.E, false, game)
+		end)
+	end
+
+	return false
+end
+
+local function fallbackPrompt(prompt, seconds)
+	if not prompt then
+		return false
+	end
+
+	if typeof(fireproximityprompt) == "function" then
+		return pcall(function()
+			fireproximityprompt(prompt, seconds or prompt.HoldDuration or 0)
+		end)
+	end
+
+	return pcall(function()
+		local hold = seconds or 0.08
+		if prompt.HoldDuration and prompt.HoldDuration > 0 then
+			hold = math.max(hold, prompt.HoldDuration + 0.05)
+		end
+
+		prompt:InputHoldBegin()
+		task.wait(hold)
+		prompt:InputHoldEnd()
+	end)
+end
+
+local function getAlignCandidates(stage)
+	local s = stage.stand or stage.promptPos
+	local r = stage.alignRadius or 1.10
+	local y = s.Y
+
+	return {
+		Vector3.new(s.X, y, s.Z),
+		Vector3.new(s.X + r, y, s.Z),
+		Vector3.new(s.X - r, y, s.Z),
+		Vector3.new(s.X, y, s.Z + r),
+		Vector3.new(s.X, y, s.Z - r),
+		Vector3.new(s.X + r, y, s.Z + r * 0.6),
+		Vector3.new(s.X - r, y, s.Z + r * 0.6),
+		Vector3.new(s.X + r, y, s.Z - r * 0.6),
+		Vector3.new(s.X - r, y, s.Z - r * 0.6),
+	}
+end
+
+local function alignUntilPrompt(stage)
+	local bestPrompt = nil
+	local bestStand = stage.stand or stage.promptPos
+
+	for _, candidate in ipairs(getAlignCandidates(stage)) do
+		if stopFlag then
+			return nil, bestStand
+		end
+
+		moveToPoint(candidate, 2.2, stage.label == "Harina")
+		hardStop()
+		aimAtPrompt(stage.promptPos)
+		task.wait(0.08)
+
+		local prompt = findPromptForStage(stage)
+		if prompt then
+			bestPrompt = prompt
+			bestStand = candidate
+			break
+		end
+	end
+
+	return bestPrompt, bestStand
+end
+
+local function waitStageDone(stage, beforeCounts, timeout)
+	timeout = timeout or 2.5
+	local started = tick()
+
+	if stage.label == "Patata" then
+		while tick() - started < timeout do
+			if stopFlag then
+				return false
+			end
+			local nowCounts = getInventoryCounts()
+			if nowCounts.potato < beforeCounts.potato then
+				return true
+			end
+			task.wait(0.05)
+		end
+		return false
+	elseif stage.label == "Harina" then
+		while tick() - started < timeout do
+			if stopFlag then
+				return false
+			end
+			local nowCounts = getInventoryCounts()
+			if nowCounts.flour < beforeCounts.flour then
+				return true
+			end
+			task.wait(0.05)
+		end
+		return false
+	else
+		return waitWithStop(stage.afterInteractWait or 0.6)
+	end
+end
+
+local function interactStageVerified(stage)
+	local tries = stage.maxRetries or 3
+
+	for _ = 1, tries do
+		if stopFlag then
+			return false
+		end
+
+		if stage.equipKeywords then
+			equipForStage(stage)
+		end
+
+		local beforeCounts = getInventoryCounts()
+		local prompt, usedStand = alignUntilPrompt(stage)
+
+		hardStop()
+		aimAtPrompt(stage.promptPos)
+		task.wait(0.08)
+
+		local hold = stage.holdSeconds or 0.35
+		if prompt and prompt.HoldDuration and prompt.HoldDuration > 0 then
+			hold = math.max(hold, prompt.HoldDuration + 0.05)
+		end
+
+		holdE(hold)
+		task.wait(0.06)
+
+		if prompt then
+			fallbackPrompt(prompt, hold)
+		else
+			tapE()
+			task.wait(0.05)
+			tapE()
+		end
+
+		if waitStageDone(stage, beforeCounts, stage.doneTimeout or 2.6) then
+			return true
+		end
+
+		if usedStand then
+			moveToPoint(usedStand + Vector3.new(0, 0, 0.75), 1.8, true)
+			hardStop()
+			task.wait(0.10)
+		end
+	end
+
+	return false
+end
+
+-- ========= POT SYSTEM =========
+
+local function getPotContainerFromPrompt(prompt)
+	if not prompt or not prompt.Parent then
+		return nil
+	end
+
+	local parent = prompt.Parent
+	local model = parent:FindFirstAncestorOfClass("Model")
+	if model then
+		local modelPath = lowerText(buildPath(model))
+		if hasAny(model.Name, POT_CONFIG.Keywords) or hasAny(modelPath, POT_CONFIG.Keywords) then
+			return model
+		end
+	end
+
+	local part = parent:FindFirstAncestorWhichIsA("BasePart")
+	if part then
+		local partPath = lowerText(buildPath(part))
+		if hasAny(part.Name, POT_CONFIG.Keywords) or hasAny(partPath, POT_CONFIG.Keywords) then
+			return part
+		end
+	end
+
+	if hasAny(buildPath(parent), POT_CONFIG.Keywords) then
+		return parent
+	end
+
+	return nil
+end
+
+local function getAnchorOfContainer(container)
+	if not container then
+		return nil
+	end
+
+	if container:IsA("BasePart") then
+		return container
+	end
+
+	if container:IsA("Model") then
+		if container.PrimaryPart then
+			return container.PrimaryPart
+		end
+		for _, obj in ipairs(container:GetDescendants()) do
+			if obj:IsA("BasePart") then
+				return obj
+			end
+		end
+	end
+
+	for _, obj in ipairs(container:GetDescendants()) do
+		if obj:IsA("BasePart") then
+			return obj
+		end
+	end
+
+	return nil
+end
+
+local function getContainerPos(container)
+	local anchor = getAnchorOfContainer(container)
+	return anchor and anchor.Position or nil
+end
+
+local function getContainerPrompt(container)
+	if not container then
+		return nil
+	end
+
+	for _, obj in ipairs(container:GetDescendants()) do
+		if obj:IsA("ProximityPrompt") then
+			local path = lowerText(buildPath(obj.Parent))
+			if hasAny(path, POT_CONFIG.Keywords) then
+				return obj
+			end
+		end
+	end
+
+	return nil
+end
+
+local function getExplicitBusyState(container)
+	if not container then
+		return nil
+	end
+
+	local function inspectObject(obj)
+		for attrName, value in pairs(obj:GetAttributes()) do
+			local attr = lowerText(attrName)
+			local val = lowerText(value)
+
+			if hasAny(attr, POT_CONFIG.BusyHints) or hasAny(val, POT_CONFIG.BusyHints) then
+				if type(value) == "boolean" then
+					return value
+				elseif type(value) == "number" then
+					return value > 0
+				elseif type(value) == "string" then
+					if val == "true" or val == "busy" or val == "occupied" or val == "cooking" then
+						return true
+					elseif val == "false" or val == "free" or val == "idle" then
+						return false
+					end
+				end
+			end
+		end
+
+		if obj:IsA("BoolValue") and hasAny(obj.Name, POT_CONFIG.BusyHints) then
+			return obj.Value
+		elseif (obj:IsA("NumberValue") or obj:IsA("IntValue")) and hasAny(obj.Name, POT_CONFIG.BusyHints) then
+			return tonumber(obj.Value) > 0
+		elseif obj:IsA("StringValue") and (hasAny(obj.Name, POT_CONFIG.BusyHints) or hasAny(obj.Value, POT_CONFIG.BusyHints)) then
+			local val = lowerText(obj.Value)
+			if val == "free" or val == "idle" then
+				return false
+			end
+			return true
+		end
+
+		return nil
+	end
+
+	local direct = inspectObject(container)
+	if direct ~= nil then
+		return direct
+	end
+
+	for _, obj in ipairs(container:GetDescendants()) do
+		local result = inspectObject(obj)
+		if result ~= nil then
+			return result
+		end
+	end
+
+	return nil
+end
+
+local function isPotBusy(container)
+	local explicit = getExplicitBusyState(container)
+	if explicit ~= nil then
+		return explicit
+	end
+
+	local lockedUntil = PotSystem.localLocks[container]
+	if lockedUntil and lockedUntil > tick() then
+		return true
+	end
+
+	local prompt = getContainerPrompt(container)
+	if prompt then
+		return not prompt.Enabled
+	end
+
+	return true
+end
+
+local function ensurePotBillboard(container, index)
+	local anchor = getAnchorOfContainer(container)
+	if not anchor then
+		return nil
+	end
+
+	local bill = PotSystem.esp[container]
+	if bill and bill.Parent == nil then
+		PotSystem.esp[container] = nil
+		bill = nil
+	end
+
+	if not bill then
+		bill = Instance.new("BillboardGui")
+		bill.Name = "PotESP_" .. tostring(index)
+		bill.Size = UDim2.new(0, 120, 0, 26)
+		bill.StudsOffset = Vector3.new(0, 3.8, 0)
+		bill.AlwaysOnTop = true
+		bill.ResetOnSpawn = false
+		bill.Parent = PlayerGui
+
+		local bg = Instance.new("Frame")
+		bg.Name = "BG"
+		bg.Size = UDim2.new(1, 0, 1, 0)
+		bg.BackgroundColor3 = Color3.fromRGB(15, 18, 24)
+		bg.BackgroundTransparency = 0.15
+		bg.BorderSizePixel = 0
+		bg.Parent = bill
+
+		local c = Instance.new("UICorner")
+		c.CornerRadius = UDim.new(0, 8)
+		c.Parent = bg
+
+		local s = Instance.new("UIStroke")
+		s.Thickness = 1
+		s.Transparency = 0.35
+		s.Parent = bg
+
+		local txt = Instance.new("TextLabel")
+		txt.Name = "Label"
+		txt.BackgroundTransparency = 1
+		txt.Size = UDim2.new(1, 0, 1, 0)
+		txt.Font = Enum.Font.GothamBold
+		txt.TextSize = 11
+		txt.TextColor3 = Color3.fromRGB(255, 255, 255)
+		txt.Parent = bg
+
+		PotSystem.esp[container] = bill
+	end
+
+	bill.Adornee = anchor
+	return bill
+end
+
+local function refreshPotSystem()
+	local found = {}
+
+	for _, obj in ipairs(workspace:GetDescendants()) do
+		if obj:IsA("ProximityPrompt") then
+			local container = getPotContainerFromPrompt(obj)
+			if container then
+				found[container] = true
+			end
+		end
+	end
+
+	local ordered = {}
+	for container in pairs(found) do
+		local pos = getContainerPos(container)
+		if pos then
+			table.insert(ordered, {container = container, pos = pos})
+		end
+	end
+
+	table.sort(ordered, function(a, b)
+		return a.pos.Z < b.pos.Z
+	end)
+
+	local newCache = {}
+
+	for i, entry in ipairs(ordered) do
+		local container = entry.container
+		local pos = entry.pos
+		local busy = isPotBusy(container)
+		local prompt = getContainerPrompt(container)
+
+		newCache[container] = {
+			index = i,
+			container = container,
+			pos = pos,
+			busy = busy,
+			prompt = prompt,
+		}
+
+		local bill = ensurePotBillboard(container, i)
+		if bill and bill:FindFirstChild("BG") and bill.BG:FindFirstChild("Label") then
+			local label = bill.BG.Label
+			local stroke = bill.BG:FindFirstChildOfClass("UIStroke")
+
+			if busy then
+				label.Text = "POT " .. i .. " | USED"
+				label.TextColor3 = Color3.fromRGB(255, 120, 120)
+				if stroke then
+					stroke.Color = Color3.fromRGB(255, 120, 120)
+				end
+			else
+				label.Text = "POT " .. i .. " | FREE"
+				label.TextColor3 = Color3.fromRGB(120, 255, 170)
+				if stroke then
+					stroke.Color = Color3.fromRGB(120, 255, 170)
+				end
+			end
+		end
+	end
+
+	for container, bill in pairs(PotSystem.esp) do
+		if not newCache[container] then
+			bill:Destroy()
+			PotSystem.esp[container] = nil
+		end
+	end
+
+	PotSystem.cache = newCache
+end
+
+task.spawn(function()
+	while true do
+		if gui == nil or gui.Parent == nil then
+			break
+		end
+		refreshPotSystem()
+		task.wait(POT_CONFIG.RefreshInterval)
+	end
+end)
+
+local function getStandPosForPot(container)
+	local potPos = getContainerPos(container)
+	local root = getRoot()
+	if not potPos or not root then
+		return nil
+	end
+
+	local y = root.Position.Y
+	local d = POT_CONFIG.StandDistance
+
+	local candidates = {
+		Vector3.new(potPos.X + d, y, potPos.Z),
+		Vector3.new(potPos.X - d, y, potPos.Z),
+		Vector3.new(potPos.X, y, potPos.Z + d),
+		Vector3.new(potPos.X, y, potPos.Z - d),
+	}
+
+	table.sort(candidates, function(a, b)
+		return (a - root.Position).Magnitude < (b - root.Position).Magnitude
+	end)
+
+	return candidates[1]
+end
+
+local function getBestFreePot()
+	refreshPotSystem()
+
+	local root = getRoot()
+	if not root then
+		return nil
+	end
+
+	local freePots = {}
+
+	for _, data in pairs(PotSystem.cache) do
+		if not data.busy then
+			table.insert(freePots, data)
+		end
+	end
+
+	table.sort(freePots, function(a, b)
+		return (a.pos - root.Position).Magnitude < (b.pos - root.Position).Magnitude
+	end)
+
+	return freePots[1]
+end
+
+local function interactRawAt(stage, holdSeconds)
+	hardStop()
+	task.wait(0.08)
+	aimAtPrompt(stage.promptPos)
+	task.wait(0.08)
+
+	local prompt = findPromptForStage(stage)
+	local hold = holdSeconds or stage.holdSeconds or 0.3
+
+	if prompt and prompt.HoldDuration and prompt.HoldDuration > 0 then
+		hold = math.max(hold, prompt.HoldDuration + 0.05)
+	end
+
+	holdE(hold)
+	task.wait(0.06)
+
+	if prompt then
+		aimAtPrompt(stage.promptPos)
+		fallbackPrompt(prompt, hold)
+	else
+		tapE()
+	end
+end
+
+local function runDynamicCookStage(stage, setStatus)
+	local chosenPot = nil
+
+	while not stopFlag do
+		chosenPot = getBestFreePot()
+		if chosenPot then
+			break
+		end
+
+		setStatus("Estado: Esperando olla libre...", Color3.fromRGB(135, 205, 255))
+		if not waitWithStop(0.25) then
+			return false
+		end
+	end
+
+	if not chosenPot then
+		return false
+	end
+
+	local standPos = getStandPosForPot(chosenPot.container)
+	if not standPos then
+		return false
+	end
+
+	local dynStage = {
+		label = "Coccion",
+		promptPos = chosenPot.pos,
+		promptPathHint = "pot",
+		holdSeconds = stage.holdSeconds,
+	}
+
+	moveToPoint(standPos, MOVE_TIMEOUT, true)
+	if stopFlag then
+		return false
+	end
+
+	setStatus("Estado: Poniendo en olla", Color3.fromRGB(135, 205, 255))
+	interactRawAt(dynStage, stage.holdSeconds)
+
+	PotSystem.localLocks[chosenPot.container] = tick() + POT_CONFIG.LocalLockSeconds
+
+	if not waitWithStop(stage.afterInteractWait or 1.0) then
+		return false
+	end
+
+	setStatus("Estado: Cocinando 60s", Color3.fromRGB(135, 205, 255))
+	if not waitWithStop(stage.cookWaitSeconds or 60) then
+		return false
+	end
+
+	standPos = getStandPosForPot(chosenPot.container)
+	if not standPos then
+		return false
+	end
+
+	moveToPoint(standPos, MOVE_TIMEOUT, true)
+	if stopFlag then
+		return false
+	end
+
+	setStatus("Estado: Recogiendo olla", Color3.fromRGB(135, 205, 255))
+	interactRawAt(dynStage, stage.finalInteractHold or stage.holdSeconds)
+
+	if not waitWithStop(0.9) then
+		return false
+	end
+
+	return true
+end
+
+-- UI
 local gui = Instance.new("ScreenGui")
-gui.Name = "MiniCoordenadasUI"
+gui.Name = "MonitoRouteExecutorMiniV6"
 gui.ResetOnSpawn = false
+gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 gui.Parent = PlayerGui
 
 local main = Instance.new("Frame")
-main.Parent = gui
-main.Size = UDim2.new(0, 230, 0, 115)
-main.Position = UDim2.new(0, 15, 0, 15)
-main.BackgroundColor3 = Color3.fromRGB(12, 12, 18)
+main.Size = UDim2.new(0, 220, 0, 80)
+main.Position = UDim2.new(0, 16, 0.22, 0)
+main.BackgroundColor3 = Color3.fromRGB(14, 16, 22)
 main.BorderSizePixel = 0
-Instance.new("UICorner", main).CornerRadius = UDim.new(0, 10)
+main.Parent = gui
 
-local stroke = Instance.new("UIStroke")
-stroke.Parent = main
-stroke.Color = Color3.fromRGB(90, 80, 255)
-stroke.Thickness = 1.5
+local mainCorner = Instance.new("UICorner")
+mainCorner.CornerRadius = UDim.new(0, 14)
+mainCorner.Parent = main
+
+local mainStroke = Instance.new("UIStroke")
+mainStroke.Color = Color3.fromRGB(220, 230, 255)
+mainStroke.Thickness = 1
+mainStroke.Transparency = 0.35
+mainStroke.Parent = main
+
+local mainGrad = Instance.new("UIGradient")
+mainGrad.Color = ColorSequence.new({
+	ColorSequenceKeypoint.new(0, Color3.fromRGB(28, 30, 40)),
+	ColorSequenceKeypoint.new(1, Color3.fromRGB(14, 16, 22)),
+})
+mainGrad.Rotation = 90
+mainGrad.Parent = main
 
 local title = Instance.new("TextLabel")
-title.Parent = main
 title.BackgroundTransparency = 1
 title.Position = UDim2.new(0, 10, 0, 6)
-title.Size = UDim2.new(1, -20, 0, 22)
+title.Size = UDim2.new(1, -20, 0, 14)
 title.Font = Enum.Font.GothamBold
-title.Text = "Mini Coordenadas"
-title.TextColor3 = Color3.fromRGB(255,255,255)
-title.TextSize = 14
+title.Text = "EXECUTOR"
+title.TextSize = 12
+title.TextColor3 = Color3.fromRGB(255, 255, 255)
 title.TextXAlignment = Enum.TextXAlignment.Left
+title.Parent = main
 
-local subtitle = Instance.new("TextLabel")
-subtitle.Parent = main
-subtitle.BackgroundTransparency = 1
-subtitle.Position = UDim2.new(0, 10, 0, 26)
-subtitle.Size = UDim2.new(1, -20, 0, 16)
-subtitle.Font = Enum.Font.Gotham
-subtitle.Text = "Z = ocultar / mostrar"
-subtitle.TextColor3 = Color3.fromRGB(140,140,160)
-subtitle.TextSize = 11
-subtitle.TextXAlignment = Enum.TextXAlignment.Left
+local status = Instance.new("TextLabel")
+status.BackgroundTransparency = 1
+status.Position = UDim2.new(0, 10, 0, 22)
+status.Size = UDim2.new(1, -20, 0, 13)
+status.Font = Enum.Font.Gotham
+status.Text = "Estado: OFF"
+status.TextSize = 10
+status.TextColor3 = Color3.fromRGB(195, 202, 220)
+status.TextXAlignment = Enum.TextXAlignment.Left
+status.Parent = main
 
-local coordBox = Instance.new("TextLabel")
-coordBox.Parent = main
-coordBox.Size = UDim2.new(1, -20, 0, 26)
-coordBox.Position = UDim2.new(0, 10, 0, 48)
-coordBox.BackgroundColor3 = Color3.fromRGB(24, 24, 32)
-coordBox.TextColor3 = Color3.fromRGB(230,230,235)
-coordBox.Font = Enum.Font.Gotham
-coordBox.TextSize = 13
-coordBox.Text = "Esperando selección..."
-coordBox.BorderSizePixel = 0
-Instance.new("UICorner", coordBox).CornerRadius = UDim.new(0, 8)
+local function makeButton(text, pos, size, c1, c2, textColor)
+	local button = Instance.new("TextButton")
+	button.Text = text
+	button.Font = Enum.Font.GothamBold
+	button.TextSize = 11
+	button.TextColor3 = textColor
+	button.Position = pos
+	button.Size = size
+	button.BackgroundColor3 = c1
+	button.BorderSizePixel = 0
+	button.AutoButtonColor = false
+	button.Parent = main
 
-local leftBtn = Instance.new("TextButton")
-leftBtn.Parent = main
-leftBtn.Size = UDim2.new(0.48, -5, 0, 30)
-leftBtn.Position = UDim2.new(0, 10, 1, -40)
-leftBtn.BackgroundColor3 = Color3.fromRGB(95, 85, 255)
-leftBtn.TextColor3 = Color3.fromRGB(255,255,255)
-leftBtn.Font = Enum.Font.GothamBold
-leftBtn.TextSize = 14
-leftBtn.Text = "Actualizar"
-leftBtn.BorderSizePixel = 0
-Instance.new("UICorner", leftBtn).CornerRadius = UDim.new(0, 8)
+	local c = Instance.new("UICorner")
+	c.CornerRadius = UDim.new(0, 10)
+	c.Parent = button
 
-local rightBtn = Instance.new("TextButton")
-rightBtn.Parent = main
-rightBtn.Size = UDim2.new(0.48, -5, 0, 30)
-rightBtn.Position = UDim2.new(0.52, 0, 1, -40)
-rightBtn.BackgroundColor3 = Color3.fromRGB(32, 32, 40)
-rightBtn.TextColor3 = Color3.fromRGB(255,255,255)
-rightBtn.Font = Enum.Font.GothamBold
-rightBtn.TextSize = 14
-rightBtn.Text = "Redondear"
-rightBtn.BorderSizePixel = 0
-Instance.new("UICorner", rightBtn).CornerRadius = UDim.new(0, 8)
+	local s = Instance.new("UIStroke")
+	s.Color = Color3.fromRGB(255, 255, 255)
+	s.Thickness = 1
+	s.Transparency = 0.5
+	s.Parent = button
 
-local checksHolder = Instance.new("Frame")
-checksHolder.Parent = main
-checksHolder.BackgroundTransparency = 1
-checksHolder.Position = UDim2.new(0, 10, 0, 80)
-checksHolder.Size = UDim2.new(1, -20, 0, 0)
+	local g = Instance.new("UIGradient")
+	g.Color = ColorSequence.new({
+		ColorSequenceKeypoint.new(0, c1),
+		ColorSequenceKeypoint.new(1, c2),
+	})
+	g.Rotation = 90
+	g.Parent = button
 
-local hidden = false
-UIS.InputBegan:Connect(function(input, gp)
-	if gp then return end
-	if input.KeyCode == Enum.KeyCode.Z then
-		hidden = not hidden
-		for _,v in ipairs(main:GetChildren()) do
-			if v ~= title and v ~= subtitle then
-				v.Visible = not hidden
-			end
-		end
-		main.Size = hidden and UDim2.new(0, 230, 0, 40) or UDim2.new(0, 230, 0, 115)
-	end
-end)
+	return button
+end
+
+local executeBtn = makeButton(
+	"EXECUTE",
+	UDim2.new(0, 10, 1, -34),
+	UDim2.new(0, 94, 0, 24),
+	Color3.fromRGB(210, 235, 255),
+	Color3.fromRGB(130, 185, 255),
+	Color3.fromRGB(12, 20, 38)
+)
+
+local stopBtn = makeButton(
+	"STOP EXEC",
+	UDim2.new(1, -104, 1, -34),
+	UDim2.new(0, 94, 0, 24),
+	Color3.fromRGB(255, 185, 135),
+	Color3.fromRGB(235, 145, 70),
+	Color3.fromRGB(40, 20, 10)
+)
 
 local dragging = false
 local dragStart
 local startPos
 
-title.InputBegan:Connect(function(input)
+main.InputBegan:Connect(function(input)
 	if input.UserInputType == Enum.UserInputType.MouseButton1 then
 		dragging = true
 		dragStart = input.Position
 		startPos = main.Position
-	end
-end)
 
-UIS.InputEnded:Connect(function(input)
-	if input.UserInputType == Enum.UserInputType.MouseButton1 then
-		dragging = false
-	end
-end)
-
-UIS.InputChanged:Connect(function(input)
-	if dragging and input.UserInputType == Enum.UserInputType.MouseMovement then
-		local delta = input.Position - dragStart
-		main.Position = UDim2.new(
-			startPos.X.Scale, startPos.X.Offset + delta.X,
-			startPos.Y.Scale, startPos.Y.Offset + delta.Y
-		)
-	end
-end)
-
-local selectedTarget = nil
-local selectedName = nil
-local roundCoords = false
-
-local function setCoordText(pos)
-	if not pos then
-		coordBox.Text = "Esperando selección..."
-		return
-	end
-
-	if roundCoords then
-		coordBox.Text = ("X: %d | Y: %d | Z: %d"):format(
-			math.round(pos.X), math.round(pos.Y), math.round(pos.Z)
-		)
-	else
-		coordBox.Text = ("X: %.2f | Y: %.2f | Z: %.2f"):format(pos.X, pos.Y, pos.Z)
-	end
-end
-
-local function createCheckbox(text, order, callback)
-	local holder = Instance.new("Frame")
-	holder.Parent = checksHolder
-	holder.BackgroundTransparency = 1
-	holder.Size = UDim2.new(1, 0, 0, 24)
-	holder.Position = UDim2.new(0, 0, 0, (order - 1) * 24)
-
-	local box = Instance.new("TextButton")
-	box.Parent = holder
-	box.Size = UDim2.new(0, 18, 0, 18)
-	box.Position = UDim2.new(0, 0, 0, 3)
-	box.BackgroundColor3 = Color3.fromRGB(30, 30, 38)
-	box.Text = ""
-	box.BorderSizePixel = 0
-	Instance.new("UICorner", box).CornerRadius = UDim.new(0, 5)
-
-	local fill = Instance.new("Frame")
-	fill.Parent = box
-	fill.Size = UDim2.new(1, -6, 1, -6)
-	fill.Position = UDim2.new(0, 3, 0, 3)
-	fill.BackgroundColor3 = Color3.fromRGB(95, 85, 255)
-	fill.Visible = false
-	fill.BorderSizePixel = 0
-	Instance.new("UICorner", fill).CornerRadius = UDim.new(0, 4)
-
-	local label = Instance.new("TextLabel")
-	label.Parent = holder
-	label.BackgroundTransparency = 1
-	label.Position = UDim2.new(0, 26, 0, 0)
-	label.Size = UDim2.new(1, -26, 1, 0)
-	label.Font = Enum.Font.Gotham
-	label.TextColor3 = Color3.fromRGB(230,230,235)
-	label.TextSize = 12
-	label.TextXAlignment = Enum.TextXAlignment.Left
-	label.Text = text
-
-	local state = false
-
-	local function setState(v)
-		state = v
-		fill.Visible = v
-		callback(v)
-	end
-
-	box.MouseButton1Click:Connect(function()
-		setState(not state)
-	end)
-
-	return {
-		Set = setState,
-		Get = function() return state end
-	}
-end
-
-local depaCheck, mashCheck
-
-depaCheck = createCheckbox("Ir a depa", 1, function(v)
-	if v then
-		if mashCheck then mashCheck.Set(false) end
-		selectedTarget = DEPTO_POS
-		selectedName = "Depa"
-		setCoordText(selectedTarget)
-	else
-		if selectedName == "Depa" then
-			selectedTarget = nil
-			selectedName = nil
-			setCoordText(nil)
-		end
-	end
-end)
-
-mashCheck = createCheckbox("Comprar mashmallow", 2, function(v)
-	if v then
-		if depaCheck then depaCheck.Set(false) end
-		selectedTarget = MASHMALLOW_POS
-		selectedName = "Mashmallow"
-		setCoordText(selectedTarget)
-	else
-		if selectedName == "Mashmallow" then
-			selectedTarget = nil
-			selectedName = nil
-			setCoordText(nil)
-		end
-	end
-end)
-
-local moving = false
-local moveThread = 0
-
-local function getCharacterParts()
-	local character = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
-	local humanoid = character:FindFirstChildOfClass("Humanoid")
-	local root = character:FindFirstChild("HumanoidRootPart")
-	if not humanoid or not root then
-		return nil, nil, nil
-	end
-	return character, humanoid, root
-end
-
-local function raycastToGround(targetPos)
-	local params = RaycastParams.new()
-	params.FilterType = Enum.RaycastFilterType.Blacklist
-
-	local character = LocalPlayer.Character
-	if character then
-		params.FilterDescendantsInstances = {character}
-	end
-
-	local origin = targetPos + Vector3.new(0, 50, 0)
-	local direction = Vector3.new(0, -200, 0)
-	local result = workspace:Raycast(origin, direction, params)
-
-	if result then
-		return Vector3.new(targetPos.X, result.Position.Y + 2.5, targetPos.Z)
-	end
-
-	return targetPos
-end
-
-local function moveSlowlyTo(targetPos)
-	local _, humanoid, root = getCharacterParts()
-	if not humanoid or not root then return end
-
-	moveThread += 1
-	local myThread = moveThread
-	moving = true
-
-	humanoid.WalkSpeed = 10
-
-	while myThread == moveThread do
-		if not root.Parent or humanoid.Health <= 0 then
-			break
-		end
-
-		local flatCurrent = Vector3.new(root.Position.X, 0, root.Position.Z)
-		local flatTarget = Vector3.new(targetPos.X, 0, targetPos.Z)
-		local distance = (flatTarget - flatCurrent).Magnitude
-
-		if distance <= 4 then
-			break
-		end
-
-		local dir = (flatTarget - flatCurrent).Unit
-		local step = math.clamp(distance, 0, 10)
-		local nextFlat = flatCurrent + dir * step
-
-		local nextPos = raycastToGround(Vector3.new(nextFlat.X, targetPos.Y, nextFlat.Z))
-		humanoid:MoveTo(nextPos)
-
-		local reached = humanoid.MoveToFinished:Wait()
-		if not reached then
-			task.wait(0.2)
-		else
-			task.wait(0.05)
-		end
-	end
-
-	moving = false
-end
-
-leftBtn.MouseButton1Click:Connect(function()
-	if selectedTarget and not moving then
-		task.spawn(function()
-			moveSlowlyTo(selectedTarget)
+		input.Changed:Connect(function()
+			if input.UserInputState == Enum.UserInputState.End then
+				dragging = false
+			end
 		end)
 	end
 end)
 
-rightBtn.MouseButton1Click:Connect(function()
-	roundCoords = not roundCoords
-	rightBtn.Text = roundCoords and "Decimal" or "Redondear"
-	if selectedTarget then
-		setCoordText(selectedTarget)
+UserInputService.InputChanged:Connect(function(input)
+	if dragging and input.UserInputType == Enum.UserInputType.MouseMovement then
+		local delta = input.Position - dragStart
+		main.Position = UDim2.new(
+			startPos.X.Scale,
+			startPos.X.Offset + delta.X,
+			startPos.Y.Scale,
+			startPos.Y.Offset + delta.Y
+		)
 	end
 end)
 
-setCoordText(nil)
+local function setStatus(text, color)
+	status.Text = text
+	status.TextColor3 = color or Color3.fromRGB(195, 202, 220)
+end
+
+local function runLoop()
+	if executing then
+		return
+	end
+
+	executing = true
+	stopFlag = false
+	setStatus("Estado: EXEC", Color3.fromRGB(135, 205, 255))
+
+	task.spawn(function()
+		while executing and not stopFlag do
+			for i, stage in ipairs(ROUTE) do
+				if stopFlag then
+					break
+				end
+
+				setStatus("Estado: " .. tostring(stage.label or i), Color3.fromRGB(135, 205, 255))
+
+				if stage.equipKeywords then
+					equipForStage(stage)
+				end
+
+				for _, point in ipairs(stage.approach or {}) do
+					if stopFlag then
+						break
+					end
+					moveToPoint(point, MOVE_TIMEOUT, false)
+				end
+
+				if stopFlag then
+					break
+				end
+
+				if stage.label == "Coccion" then
+					if not runDynamicCookStage(stage, setStatus) then
+						break
+					end
+				else
+					local done = false
+
+					while not stopFlag and not done do
+						setStatus("Estado: Alineando " .. tostring(stage.label), Color3.fromRGB(135, 205, 255))
+						done = interactStageVerified(stage)
+
+						if not done then
+							setStatus("Estado: Reintentando " .. tostring(stage.label), Color3.fromRGB(255, 205, 135))
+							if not waitWithStop(0.15) then
+								break
+							end
+						end
+					end
+
+					if stopFlag then
+						break
+					end
+
+					if not waitWithStop(stage.afterInteractWait or 0.8) then
+						break
+					end
+				end
+			end
+
+			if stopFlag then
+				break
+			end
+
+			task.wait(0.10)
+		end
+
+		hardStop()
+		executing = false
+		stopFlag = false
+		setStatus("Estado: OFF", Color3.fromRGB(195, 202, 220))
+	end)
+end
+
+local function stopExecutor()
+	if not executing then
+		return
+	end
+
+	stopFlag = true
+	hardStop()
+	setStatus("Estado: STOPPING...", Color3.fromRGB(255, 205, 135))
+end
+
+executeBtn.MouseButton1Click:Connect(function()
+	runLoop()
+end)
+
+stopBtn.MouseButton1Click:Connect(function()
+	stopExecutor()
+end)
